@@ -2,183 +2,177 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
-use Telegram\Bot\Laravel\Facades\Telegram;
-use Telegram\Bot\Api;
 use Illuminate\Support\Facades\DB;
+use Telegram\Bot\Api;
 
 class SubsidiController extends Controller
 {
     public function index()
     {
         $telegram = new Api('8126177348:AAG36DlX_WwTSZF7wIMfvVR8ytxeMquXJSg');
-        $response = $telegram->getMe();
-
         $idMessage = $telegram->getUpdates()[0]->update_id + 1;
 
-        $message = "bukan satu";
+        $message = $telegram->getUpdates()[0]->message->text == '1'
+            ? 'anda menjawab 1'
+            : 'bukan satu';
 
-        if ($telegram->getUpdates()[0]->message->text == "1") {
-            $message = "anda menjawab 1";
-        }
-
-        $response = $telegram->sendMessage([
-            'chat_id' => '487930753',
-            'text' => $message
-        ]);
-
+        $response = $telegram->sendMessage(['chat_id' => '487930753', 'text' => $message]);
         $messageId = $response->getMessageId();
 
-        $response = Http::get('https://api.telegram.org/bot8126177348:AAG36DlX_WwTSZF7wIMfvVR8ytxeMquXJSg/getUpdates?offset=' . $idMessage);
+        $response = Http::get(
+            'https://api.telegram.org/bot8126177348:AAG36DlX_WwTSZF7wIMfvVR8ytxeMquXJSg/getUpdates?offset=' . $idMessage
+        );
 
         dd($messageId, $idMessage, $telegram->getUpdates());
     }
 
     public function create()
     {
-        $source = $this->listNik(0);
-        if ($this->cekKondisi()) {
-            $data = DB::table('penerima')
-                ->where('is_send', "false")
-                ->orderBy("id", "asc")
-                ->first();
-
-            $nik = $data->nik;
-            if ($data) {
-                $cekNik = Http::withToken($this->getToken())
-                    ->get('https://api-map.my-pertamina.id/customers/v2/verify-nik?nationalityId=' . $nik);
-
-                if ($cekNik->status() == 200) {
-
-                    $result = json_decode($cekNik->body());
-                    sleep(2);
-                    if (($result->success)) {
-                        if (count($result->data->customerTypes) == 1) {
-                            if ($result->data->customerTypes[0]->name == "Rumah Tangga") {
-                                // $rawInsert = [
-                                //     "products" => [
-                                //         [
-                                //             "productId" => "c74228ca-2083-47fd-87ab-4790a9cea2de",
-                                //             "quantity" => 1
-                                //         ]
-                                //     ],
-                                //     "token" => $result->data->token,
-                                //     "subsidi" => [
-                                //         "nik" => $nik,
-                                //         "familyIdEncrypted" => $result->data->familyIdEncrypted,
-                                //         "category" => $result->data->customerTypes[0]->name,
-                                //         "sourceTypeId" => $result->data->customerTypes[0]->sourceTypeId,
-                                //         "nama" => $result->data->name,
-                                //         "channelInject" => $result->data->channelInject,
-                                //     ]
-                                // ];
-
-                                // $post =  Http::withToken($this->getToken())
-                                //     ->post('https://api-map.my-pertamina.id/general/v2/transactions', $rawInsert);
-
-                                $rawInsert = [
-                                    "quantity" => 1,
-                                    "token" => $result->data->token,
-                                    "nationalityId" => $nik,
-                                    "familyIdEncrypted" => $result->data->familyIdEncrypted,
-                                    "category" => $result->data->customerTypes[0]->name,
-                                    "sourceTypeId" => $result->data->customerTypes[0]->sourceTypeId,
-                                    "name" => $result->data->name,
-                                    "channelInject" => $result->data->channelInject,
-                                    "coordinate" => "-,-",
-                                ];
-
-
-                                $post = Http::withToken($this->getToken())
-                                    ->asMultipart() // multipart/form-data
-                                    ->post('https://api-map.my-pertamina.id/general/v3/transactions', [
-                                        ['name' => 'quantity', 'contents' => 1],
-                                        [
-                                            'name' => 'token',
-                                            'contents' => $result->data->token,
-                                        ],
-                                        [
-                                            'name' => 'nationalityId',
-                                            'contents' => $nik,
-                                        ],
-                                        [
-                                            'name' => 'familyIdEncrypted',
-                                            'contents' => $result->data->familyIdEncrypted,
-                                        ],
-                                        [
-                                            'name' => 'category',
-                                            'contents' => $result->data->customerTypes[0]->name,
-                                        ],
-                                        [
-                                            'name' => 'sourceTypeId',
-                                            'contents' => $result->data->customerTypes[0]->sourceTypeId,
-                                        ],
-                                        [
-                                            'name' => 'name',
-                                            'contents' => $result->data->name,
-                                        ],
-                                        [
-                                            'name' => 'channelInject',
-                                            'contents' => $result->data->channelInject,
-                                        ],
-                                        [
-                                            'name' => 'coordinate',
-                                            'contents' => '-,-',
-                                        ],
-                                    ]);
-
-                                if ($post->status() != 200) {
-                                    DB::table('penerima')
-                                        ->where('id', $data->id)
-                                        ->update(['is_send' => "failed"]);
-
-                                    $this->sendTelegram('NIK gagal insert : ' . $nik . ' ' . $post->body());
-                                } else {
-                                    DB::table('penerima')
-                                        ->where('id', $data->id)
-                                        ->update(['is_send' => "true"]);
-
-                                    $getPosition = DB::table('setting')
-                                        ->where('type', "position")
-                                        ->first();
-
-                                    DB::table('setting')
-                                        ->where('type', "position")
-                                        ->update(['value' => (int) $getPosition->value + 1]);
-                                    $this->sendTelegram('NIK berhasil insert: ' . $nik . ' Total' . (int) $getPosition->value + 1);
-                                }
-                            } else {
-                                DB::table('penerima')
-                                    ->where('id', $data->id)
-                                    ->update(['is_send' => "failed"]);
-
-                                $this->sendTelegram('NIK bukan rumah tangga : ' . $nik);
-                            }
-                        } else {
-                            DB::table('penerima')
-                                ->where('id', $data->id)
-                                ->update(['is_send' => "failed"]);
-
-                            $this->sendTelegram('NIK multi kategori : ' . $nik);
-                        }
-                    } else {
-                        $this->sendTelegram('NIK Gagal : ' . $nik);
-                    }
-                } else {
-                    $this->sendTelegram('NIK tidak ditemukan : ' . $nik . " " . $cekNik->body());
-                }
-            }
-
-            return response()->json([
-                'status' => true,
-                'message' => 'Selesai',
-            ]);
+        if (!$this->cekKondisi()) {
+            return;
         }
+
+        $data = DB::table('penerima')
+            ->where('is_send', 'false')
+            ->orderBy('id', 'asc')
+            ->first();
+
+        if (!$data) {
+            return response()->json(['status' => false, 'message' => 'Tidak ada data']);
+        }
+
+        $nik = $data->nik;
+        $cekNik = Http::withToken($this->getToken())
+            ->get('https://api-map.my-pertamina.id/general/customer-service/v1/verify-nik?nationalityId=' . $nik);
+
+
+        if ($cekNik->status() != 200) {
+            $this->sendTelegram('NIK tidak ditemukan : ' . $nik . ' ' . $cekNik->body());
+            return response()->json(['status' => true, 'message' => 'Selesai']);
+        }
+
+        $result = json_decode($cekNik->body());
+        sleep(2);
+
+        if (!$result->success) {
+            $this->sendTelegram('NIK Gagal : ' . $nik);
+            return response()->json(['status' => true, 'message' => 'Selesai']);
+        }
+
+        if (count($result->data->customerTypes) != 1) {
+            $this->markFailed($data->id);
+            $this->sendTelegram('NIK multi kategori : ' . $nik);
+            return response()->json(['status' => true, 'message' => 'Selesai']);
+        }
+
+        if ($result->data->customerTypes[0]->name != 'Rumah Tangga') {
+            $this->markFailed($data->id);
+            $this->sendTelegram('NIK bukan rumah tangga : ' . $nik);
+            return response()->json(['status' => true, 'message' => 'Selesai']);
+        }
+
+        // Jika belum setuju terms, lakukan agreement terlebih dahulu
+        if (!$result->data->isAgreedTerms) {
+            $agreementOk = $this->postDanPutAgreement($nik);
+            if (!$agreementOk) {
+                return response()->json(['status' => true, 'message' => 'Selesai']);
+            }
+        }
+
+        // Kirim transaksi
+        $this->postTransaksi($data, $nik, $result);
+
+        return response()->json(['status' => true, 'message' => 'Selesai']);
     }
 
-    private function listNik($param)
+    // --- Private Helpers ------------------------------------------------------
+
+    /**
+     * POST terms-consent lalu PUT registration.
+     * Mengembalikan true jika keduanya sukses.
+     */
+    private function postDanPutAgreement(string $nik): bool
+    {
+        $postAgreement = Http::withToken($this->getToken())
+            ->asMultipart()
+            ->post('https://api-map.my-pertamina.id/general/customer-service/v1/terms-consent', [
+                ['name' => 'historyIdAgreement', 'contents' => 20],
+                ['name' => 'historyIdTerm', 'contents' => 19],
+                ['name' => 'customerType', 'contents' => 'Rumah Tangga'],
+                ['name' => 'nationalityId', 'contents' => $nik],
+            ]);
+
+        if ($postAgreement->status() != 200) {
+            return false;
+        }
+
+        $putAgreement = Http::withToken($this->getToken())
+            ->asMultipart()
+            ->put('https://api-map.my-pertamina.id/customers/v3/registration/' . $nik . '/Rumah%20Tangga', [
+                ['name' => 'pob', 'contents' => getKotaLahirDariNik($nik)],
+                ['name' => 'dob', 'contents' => getTanggalLahirDariNik($nik)],
+            ]);
+
+        return $putAgreement->status() == 200;
+    }
+
+    /**
+     * POST transaksi dan update status penerima.
+     */
+    private function postTransaksi(object $data, string $nik, object $result): void
+    {
+        $customerType = $result->data->customerTypes[0];
+
+        $post = Http::withToken($this->getToken())
+            ->asMultipart()
+            ->post('https://api-map.my-pertamina.id/general/v3/transactions', [
+                ['name' => 'quantity', 'contents' => 1],
+                ['name' => 'token', 'contents' => $result->data->token],
+                ['name' => 'nationalityId', 'contents' => $nik],
+                ['name' => 'familyIdEncrypted', 'contents' => $result->data->familyIdEncrypted],
+                ['name' => 'category', 'contents' => $customerType->name],
+                ['name' => 'sourceTypeId', 'contents' => $customerType->sourceTypeId],
+                ['name' => 'name', 'contents' => $result->data->name],
+                ['name' => 'channelInject', 'contents' => $result->data->channelInject],
+                ['name' => 'coordinate', 'contents' => '-,-'],
+            ]);
+
+        if ($post->status() != 200) {
+            $this->markFailed($data->id);
+            $this->sendTelegram('NIK gagal insert : ' . $nik . ' ' . $post->body());
+            return;
+        }
+
+        $this->markSuccess($data->id);
+        $total = $this->incrementPosition();
+        $this->sendTelegram('NIK berhasil insert: ' . $nik . ' Total ' . $total);
+    }
+
+    /** Tandai penerima sebagai gagal. */
+    private function markFailed(int $id): void
+    {
+        DB::table('penerima')->where('id', $id)->update(['is_send' => 'failed']);
+    }
+
+    /** Tandai penerima sebagai berhasil. */
+    private function markSuccess(int $id): void
+    {
+        DB::table('penerima')->where('id', $id)->update(['is_send' => 'true']);
+    }
+
+    /** Increment posisi dan kembalikan nilai terbaru. */
+    private function incrementPosition(): int
+    {
+        $current = (int) DB::table('setting')->where('type', 'position')->value('value');
+        DB::table('setting')->where('type', 'position')->update(['value' => $current + 1]);
+        return $current + 1;
+    }
+
+    // --- Lain-lain ------------------------------------------------------------
+
+    private function listNik(int $param): array
     {
         $array = [
             [
@@ -227,43 +221,28 @@ class SubsidiController extends Controller
                 '3471040306780001',
                 '3471040306630001',
                 '3471040306030001',
-            ]
+            ],
         ];
 
         return $array[$param];
     }
 
-    private function getToken()
+    private function getToken(): string
     {
-        $token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTAwZDdkZC00ODJhLTQ4YzUtYmY0Ny1jY2E5OGU4NDNmZDIiLCJpYXQiOjE3ODMzMDM5NDgsImV4cCI6MTc4MzMwNDg0OCwiYXVkIjoibWVyY2hhbnQiLCJpc3MiOiJtYXAtbGl0ZSJ9.BCXVnQfpa6xfHwqyuFQqDgk_eKdIVL0jfhivwbk-DimrvABdSxeGUjNzRYb4WWBJNQavh4plgozRKO1rsqvT0hCWXz1dFtgRpqsiXPzr3Lun-FvrBUaHSeHCIhv9fCXxK_XlEI99V3jbyhNbpIfrc3gqYEY_BisVP59CkmNO_b4VNnZi7stjfA3bEpaJ8mJ0baNWRFFPw91ICVQfV2itsUm_r7lPIlL5TLcC7jh4gfqGCHvBoA5voYTkXppBO1xcOAtQ9RPEla0rnWmvoZi6wZ7fJeudmxCRXkjVh8Q8mMQxCCYVr911_AHazVqIBCXjznjFfk_Qk3PVbK5dmYj1Ttuo2Z9eD7_52WyTXdCmphXp2E9GodudueRC9FBGmfrfNZZmxa_62-xZbONR48out5k12XEPBOr0POnXShPgxKhjiX4aPoDbCi5TjL6YEi_U3cISQhqzhxTyxW7mZlzEY_kA7CapCKJCbR-kq9-MQZOEY_IPOpUJmnZto1a21hxNS9QHfPmCf8m9bsNJc0eYdfKqWCbDxc1Ucyq_Xy9501xLa2eRzfHuETB-bSLdu2Kj_UXCIgeiWPFTbsZznzEiqAGdg4Se5shpgxMTRyxYnGcsRwFCsllQoFDTU-Qga6ae00boAWlMMUd0jeFU5S6_NtQWx39JtzKEnNr-jwCxB0Q";
-        return $token;
+        return 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTAwZDdkZC00ODJhLTQ4YzUtYmY0Ny1jY2E5OGU4NDNmZDIiLCJpYXQiOjE3ODcwNTc2NjcsImV4cCI6MTc4NzA1ODU2NywiYXVkIjoibWVyY2hhbnQiLCJpc3MiOiJtYXAtbGl0ZSJ9.SQ_T2rUWj66ccbU_hzonwE8ZWx6mYPUOqNsnc2qonZ8YmfCWYhlCuW9hV2g_NsKEvj0MGZ4aeqccayCEGbvw5F94FC_3PnHY-G0Uxk3pLUnuNNvvWVAq_U0s180kEw1jtse4sDGwDoNcG4k54hcDd8ASZvlDrZC1QdL51jJyhDwTGPluofMVD8ST0mUzy2mS4Uj7pqxrkCFWT4knI4ab45AXAawUICLaCH_pt0pkjbmFs2RXkSqRzPBv-V-pgDVSVUIXx0mIent3hQDsnowDgCKP6Bg86yCcis82Qb1qFaOKHj7r8E11VW6MrOPtG2Cpfe5Kzj3CPzC-52yRPJi1jQ7YUK9QeQ58faPZhHwsvlZ8KLgH3B-NPjuLn-ISBA4IoCb-zsne9D2TgAFTOEmIbdpf3nSBRE5ORvdeyFhmxcUZjF6Rr0YuFePcxveP9pW00HtVc5Eh4kXEoVopoMiyiKKSywPQS2Cds5FvHLW8aFVlPFV-cS4CxHSIAS8aHqKRUKW8iRLM9itWomy7zhQEVhoY9bH7tLeXvSOwcccual1kmuOXQB2Zv8dMjfHoxlhW5_HWxN63kHnGHoqokCiPLmVyuEbhJrVEgW3uT59joVGyMlRoGt790bRTRqyYKkTyUSivF-A0i7EQvfPpG5QoKnuoRQGSftl3UysfAOpc_OM';
     }
 
-    private function sendTelegram($message)
+    private function sendTelegram(string $message): void
     {
         $telegram = new Api('8126177348:AAG36DlX_WwTSZF7wIMfvVR8ytxeMquXJSg');
-
-
-        $response = $telegram->sendMessage([
-            'chat_id' => '487930753',
-            'text' => $message
-        ]);
+        $telegram->sendMessage(['chat_id' => '487930753', 'text' => $message]);
     }
 
-    private function cekKondisi()
+    private function cekKondisi(): bool
     {
-        $getTotal = DB::table('setting')
-            ->where('type', "total")
-            ->first();
+        $total = (int) DB::table('setting')->where('type', 'total')->value('value');
+        $position = (int) DB::table('setting')->where('type', 'position')->value('value');
 
-        $getPosition = DB::table('setting')
-            ->where('type', "position")
-            ->first();
-
-        if ($getTotal->value > $getPosition->value) {
-            return true;
-        }
-
-        return false;
+        return $total > $position;
     }
 }
